@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useToast } from '@/hooks/use-toast';
 
 type Section = 'card' | 'referral' | 'donate' | 'balance' | 'withdrawal' | 'history' | 'menu' | 'support' | 'admin';
 
@@ -34,34 +35,230 @@ const menuItems: MenuItem[] = [
   { id: 'history', label: 'История', icon: 'Clock' },
 ];
 
+const API_URL = 'https://functions.poehali.dev/c7c43fb4-3a2f-460c-abf9-7522b764bb37';
+
 const Index = () => {
+  const { toast } = useToast();
   const [activeSection, setActiveSection] = useState<Section>('card');
-  const [balance] = useState(0);
-  const [referralCode] = useState('REF12345');
-  const [referralCount] = useState(0);
+  const [balance, setBalance] = useState(0);
+  const [referralCode, setReferralCode] = useState('REF12345');
+  const [referralCount, setReferralCount] = useState(0);
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
   const [withdrawalPhone, setWithdrawalPhone] = useState('');
   const [withdrawalBank, setWithdrawalBank] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [telegramId] = useState('123456789');
+  const [userId, setUserId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const [transactions] = useState<Transaction[]>([
-    {
-      id: 1,
-      type: 'income',
-      amount: 500,
-      description: 'Бонус за оформление карты',
-      date: '2025-10-28 14:30',
-      status: 'completed'
-    },
-    {
-      id: 2,
-      type: 'income',
-      amount: 200,
-      description: 'Реферальная программа',
-      date: '2025-10-27 12:15',
-      status: 'completed'
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [withdrawalRequests, setWithdrawalRequests] = useState<any[]>([]);
+
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const loadUserData = async () => {
+    try {
+      const response = await fetch(`${API_URL}?action=get_user&telegram_id=${telegramId}`);
+      
+      if (response.status === 404) {
+        await registerUser();
+        return;
+      }
+      
+      const data = await response.json();
+      
+      if (data.user) {
+        setUserId(data.user.id);
+        setBalance(parseFloat(data.user.balance));
+        setReferralCode(data.user.referral_code);
+        setReferralCount(data.referral_count || 0);
+        setTransactions(data.transactions || []);
+      }
+    } catch (error) {
+      console.error('Error loading user data:', error);
     }
-  ]);
+  };
+
+  const registerUser = async () => {
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'register',
+          telegram_id: telegramId,
+          username: 'user',
+          first_name: 'Пользователь'
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.referral_code) {
+        setReferralCode(data.referral_code);
+        await loadUserData();
+      }
+    } catch (error) {
+      console.error('Error registering user:', error);
+    }
+  };
+
+  const loadWithdrawalRequests = async () => {
+    try {
+      const response = await fetch(`${API_URL}?action=get_withdrawals&telegram_id=${telegramId}`);
+      const data = await response.json();
+      setWithdrawalRequests(data.withdrawals || []);
+    } catch (error) {
+      console.error('Error loading withdrawals:', error);
+    }
+  };
+
+  const handleWithdrawalSubmit = async () => {
+    if (!userId || !withdrawalAmount || !withdrawalPhone || !withdrawalBank || !receiptFile) {
+      toast({
+        title: 'Ошибка',
+        description: 'Заполните все поля и прикрепите чек',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    if (parseFloat(withdrawalAmount) < 500) {
+      toast({
+        title: 'Ошибка',
+        description: 'Минимальная сумма вывода 500 ₽',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    if (parseFloat(withdrawalAmount) > balance) {
+      toast({
+        title: 'Ошибка',
+        description: 'Недостаточно средств',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    setLoading(true);
+    
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_withdrawal',
+          user_id: userId,
+          amount: parseFloat(withdrawalAmount),
+          phone: withdrawalPhone,
+          bank: withdrawalBank
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast({
+          title: 'Успешно',
+          description: 'Заявка на вывод отправлена'
+        });
+        
+        setWithdrawalAmount('');
+        setWithdrawalPhone('');
+        setWithdrawalBank('');
+        setReceiptFile(null);
+        
+        await loadUserData();
+      } else {
+        toast({
+          title: 'Ошибка',
+          description: data.error || 'Не удалось создать заявку',
+          variant: 'destructive'
+        });
+      }
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Произошла ошибка при отправке заявки',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApproveWithdrawal = async (withdrawalId: number) => {
+    setLoading(true);
+    
+    try {
+      const response = await fetch(API_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'approve_withdrawal',
+          withdrawal_id: withdrawalId
+        })
+      });
+
+      if (response.ok) {
+        toast({
+          title: 'Успешно',
+          description: 'Заявка одобрена'
+        });
+        
+        await loadWithdrawalRequests();
+      }
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось одобрить заявку',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectWithdrawal = async (withdrawalId: number) => {
+    setLoading(true);
+    
+    try {
+      const response = await fetch(API_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reject_withdrawal',
+          withdrawal_id: withdrawalId
+        })
+      });
+
+      if (response.ok) {
+        toast({
+          title: 'Успешно',
+          description: 'Заявка отклонена'
+        });
+        
+        await loadWithdrawalRequests();
+      }
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось отклонить заявку',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection === 'admin') {
+      loadWithdrawalRequests();
+    }
+  }, [activeSection]);
 
   const renderContent = () => {
     switch (activeSection) {
@@ -449,9 +646,14 @@ const Index = () => {
               </AlertDescription>
             </Alert>
 
-            <Button className="w-full" size="lg">
+            <Button 
+              className="w-full" 
+              size="lg"
+              onClick={handleWithdrawalSubmit}
+              disabled={loading}
+            >
               <Icon name="Send" size={18} className="mr-2" />
-              Отправить заявку на вывод
+              {loading ? 'Отправка...' : 'Отправить заявку на вывод'}
             </Button>
           </div>
         );
@@ -638,54 +840,65 @@ const Index = () => {
                 Заявки на вывод
               </h3>
               <div className="space-y-3">
-                {[
-                  {
-                    id: 1,
-                    user: 'Иван Петров',
-                    phone: '+7 900 123-45-67',
-                    bank: 'Сбербанк',
-                    amount: 1000,
-                    date: '2025-10-29 15:30'
-                  }
-                ].map((request) => (
-                  <Card key={request.id} className="p-4 border-primary/20">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold">{request.user}</span>
-                        <Badge variant="secondary">Ожидает</Badge>
+                {withdrawalRequests.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Icon name="Inbox" className="mx-auto mb-2 opacity-50" size={48} />
+                    <p className="text-sm">Нет заявок на вывод</p>
+                  </div>
+                ) : (
+                  withdrawalRequests.map((request) => (
+                    <Card key={request.id} className="p-4 border-primary/20">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold">
+                            {request.first_name || request.username || `ID: ${request.telegram_id}`}
+                          </span>
+                          <Badge variant="secondary">Ожидает</Badge>
+                        </div>
+                        <Separator />
+                        <div className="space-y-1 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Сумма:</span>
+                            <span className="font-bold text-primary">{request.amount} ₽</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Телефон:</span>
+                            <span className="font-mono">{request.phone}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Банк:</span>
+                            <span>{request.bank}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Дата:</span>
+                            <span>{new Date(request.created_at).toLocaleString('ru-RU')}</span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 pt-2">
+                          <Button 
+                            size="sm" 
+                            className="flex-1"
+                            onClick={() => handleApproveWithdrawal(request.id)}
+                            disabled={loading}
+                          >
+                            <Icon name="Check" size={16} className="mr-1" />
+                            Одобрить
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="destructive" 
+                            className="flex-1"
+                            onClick={() => handleRejectWithdrawal(request.id)}
+                            disabled={loading}
+                          >
+                            <Icon name="X" size={16} className="mr-1" />
+                            Отклонить
+                          </Button>
+                        </div>
                       </div>
-                      <Separator />
-                      <div className="space-y-1 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Сумма:</span>
-                          <span className="font-bold text-primary">{request.amount} ₽</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Телефон:</span>
-                          <span className="font-mono">{request.phone}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Банк:</span>
-                          <span>{request.bank}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Дата:</span>
-                          <span>{request.date}</span>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 pt-2">
-                        <Button size="sm" className="flex-1">
-                          <Icon name="Check" size={16} className="mr-1" />
-                          Одобрить
-                        </Button>
-                        <Button size="sm" variant="destructive" className="flex-1">
-                          <Icon name="X" size={16} className="mr-1" />
-                          Отклонить
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+                    </Card>
+                  ))
+                )}
               </div>
             </Card>
           </div>

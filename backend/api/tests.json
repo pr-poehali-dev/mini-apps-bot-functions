@@ -1,0 +1,20 @@
+{
+  "tests": [
+    {
+      "name": "Test OPTIONS CORS",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Test get user without telegram_id",
+      "method": "GET",
+      "path": "/?action=get_user",
+      "expectedStatus": 400,
+      "expectedBody": {
+        "error": "telegram_id required"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
